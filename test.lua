@@ -212,11 +212,10 @@ local function MakeUI()
     local notifHolder = New("Frame",{
         Parent=screenGui,
         AnchorPoint=isMobile and Vector2.new(1,0) or Vector2.new(1,1),
-        Size=isMobile and UDim2.new(0,200,0,120) or UDim2.new(0,280,0,200),
-        Position=isMobile and UDim2.new(1,-200,0,5) or UDim2.new(1,-12,1,-12),
+        Size=isMobile and UDim2.new(0,250,0,150) or UDim2.new(0,280,0,200),
+        Position=isMobile and UDim2.new(1,-260,0,10) or UDim2.new(1,-12,1,-12),
         BackgroundTransparency=1,
-        ClipsDescendants=true,
-        ZIndex = 100
+        ClipsDescendants=true
     })
     local notifLayout = New("UIListLayout",{
         Parent=notifHolder,
@@ -361,37 +360,38 @@ Notify = function(text, nType, duration)
     local notifWidth = math.clamp(notifHolder.AbsoluteSize.X - 20, isMobile and 150 or 200, isMobile and 250 or 400)
     local notif = New("Frame", {
         Parent = notifHolder,
-        Size = UDim2.new(1, 0, 0, 0),
-        AutomaticSize = Enum.AutomaticSize.Y,
+        Size = UDim2.new(0, notifWidth, 0, 0),
         BackgroundColor3 = Theme.Colors.Panel,
         BorderSizePixel = 0,
-        ClipsDescendants = true,
-        ZIndex = 101
+        ClipsDescendants = true
     })
     New("UICorner", { Parent = notif, CornerRadius = UDim.new(0, 8) })
     New("UIStroke", { Parent = notif, Color = Theme.Colors.Shadow, Thickness = 1, Transparency = 0.6 })
     local label = New("TextLabel", {
         Parent = notif,
-        Size = UDim2.new(1, 0, 1, 0),
-        Position = UDim2.new(0, 0, 0, 0),
+        Size = UDim2.new(1, -16, 1, -16),
+        Position = UDim2.new(0, 8, 0, 8),
         Font = Theme.Font,
         TextSize = Theme.TextSize,
         TextColor3 = Theme.Colors.Text,
         BackgroundTransparency = 1,
         TextWrapped = true,
         Text = text,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Top,
-        AutomaticSize = Enum.AutomaticSize.Y
+        TextXAlignment = Enum.TextXAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Center
     })
     local bar = New("Frame", {
         Parent = notif,
         Size = UDim2.new(1, 0, 0, 3),
-        Position = UDim2.new(0, 0, 1, 0),
+        Position = UDim2.new(0, 0, 1, -3),
         BackgroundColor3 = Theme.ColorVariants[nType],
         BorderSizePixel = 0
     })
     table.insert(activeNotifs, notif)
+
+    label:GetPropertyChangedSignal("TextBounds"):Connect(function()
+        notif.Size = UDim2.new(0, notifWidth, 0, math.max(40, label.TextBounds.Y + 20))
+    end)
 
     notif.BackgroundTransparency = 1
     label.TextTransparency = 1
