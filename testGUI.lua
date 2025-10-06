@@ -1,3 +1,4 @@
+
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
@@ -758,42 +759,9 @@ AddTab("AutoBuy", function(parent)
     local ReplicatedStorage = game:GetService("ReplicatedStorage")
     local TweenService = game:GetService("TweenService")
     local UserInputService = game:GetService("UserInputService")
-    local HttpService = game:GetService("HttpService")
-    local HapticService = game:GetService("HapticService")
     local remotes = ReplicatedStorage:WaitForChild("Remotes")
     local BuyItemRemote = remotes:WaitForChild("BuyItem")
     local BuyGearRemote = remotes:WaitForChild("BuyGear")
-
-    local player = game.Players.LocalPlayer
-    local isMobile = UserInputService.TouchEnabled
-
-    -- Haptic feedback local to this tab
-    local supportsHaptic = HapticService:IsVibrationSupported(Enum.UserInputType.Touch) and HapticService:IsMotorSupported(Enum.UserInputType.Touch, Enum.VibrationMotor.Small)
-    local function HapticClick()
-        if isMobile and supportsHaptic then
-            HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Small, 1)
-            task.delay(0.05, function()
-                HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Small, 0)
-            end)
-        end
-    end
-
-    -- Save/Load Keys
-    local SaveKey = "TCS_AutoBuy_State"
-    local function SaveAutoBuyState(state)
-        if not state then return end
-        pcall(function()
-            player:SetAttribute(SaveKey, HttpService:JSONEncode(state))
-        end)
-    end
-    local function LoadAutoBuyState()
-        local attr = player:GetAttribute(SaveKey)
-        if attr then
-            local suc, data = pcall(function() return HttpService:JSONDecode(attr) end)
-            if suc then return data end
-        end
-        return nil
-    end
 
     -- Options (pre-compute lowercase for faster filtering)
     local PlantOptions = {
@@ -816,12 +784,378 @@ AddTab("AutoBuy", function(parent)
     local runningLoops = { Plant = false, Gear = false }
     local autoDelay = { Plant = 0.3, Gear = 0.3 }
 
-    -- Scaled text sizes (updated on resize)
-    local regularTextSize = 14
-    local boldTextSize = 16
-    local smallTextSize = 12
+    -- Initial scale
+    local currentScale = scaleFactor
 
-    local function autoLoop(typ)
+    -- Frame container (auto-size for responsiveness)
+    local frame = New("Frame", {
+        Parent = parent,
+        Size = UDim2.new(1, 0, 0, 0),
+        BackgroundColor3 = Theme.Colors.PanelAlt,
+        BorderSizePixel = 0,
+        AutomaticSize = Enum.AutomaticSize.Y,
+    })
+    New("UICorner", {Parent = frame, CornerRadius = UDim.new(0,8)})
+
+    local function createScaledPos(xOff, yOff)
+        return UDim2.new(0, xOff * currentScale, 0, yOff * currentScale)
+    end
+
+    local function createScaledSize(wScale, wOff, hScale, hOff)
+        return UDim2.new(wScale, wOff * currentScale, hScale, hOff * currentScale)
+    end
+
+    local pad = 10 * currentScale
+    local mpad = 20 * currentScale
+    local tpad = 5 * currentScale
+
+    local titleLabel = New("TextLabel", {
+        Parent = frame,
+        Size = createScaledSize(1, -mpad, 0, 30),
+        Position = createScaledPos(pad / currentScale, pad / currentScale),
+        Font = Theme.FontBold,
+        TextSize = math.clamp(16 * currentScale, 12, 20),
+        Text = "Select Items to Auto Buy",
+        TextColor3 = Theme.Colors.Text,
+        BackgroundTransparency = 1,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    })
+
+    local function updateTitle()
+        local count = #selectedPerType[selectedType]
+        local total = selectedType == "Plant" and #PlantOptions or #GearOptions
+        titleLabel.Text = string.format("Select Items to Auto Buy (%d/%d)", count, total)
+    end
+
+    -- Type selector
+    local typeSelector = New("Frame", {
+        Parent = frame,
+        Size = createScaledSize(1, -mpad, 0, 30),
+        Position = createScaledPos(pad / currentScale, 50),
+        BackgroundTransparency = 1,
+    })
+    local plantBtn = New("TextButton", {
+        Parent = typeSelector, 
+        Size = createScaledSize(0.5, -tpad, 1, 0),
+        Text = "Plant", 
+        Font = Theme.Font, 
+        TextSize = Theme.TextSize,
+        BackgroundColor3 = Theme.Colors.Button, 
+        TextColor3 = Theme.Colors.Text,
+    })
+    local gearBtn = New("TextButton", {
+        Parent = typeSelector, 
+        Position = UDim2.new(0.5, tpad / currentScale, 0, 0), 
+        Size = createScaledSize(0.5, -tpad, 1, 0),
+        Text = "Gear", 
+        Font = Theme.Font, 
+        TextSize = Theme.TextSize,
+        BackgroundColor3 = Theme.Colors.Button, 
+        TextColor3 = Theme.Colors.Text,
+    })
+    New("UICorner", {Parent = plantBtn, CornerRadius = UDim.new(0,6)})
+    New("UICorner", {Parent = gearBtn, CornerRadius = UDim.new(0,6)})
+
+    -- Search
+    local searchBox = New("TextBox", {
+        Parent = frame,
+        Size = createScaledSize(1, -mpad, 0, 28),
+        Position = createScaledPos(pad / currentScale, 90),
+        PlaceholderText = "Search...",
+        Font = Theme.Font,
+        TextSize = Theme.TextSize,
+        TextColor3 = Theme.Colors.Text,
+        BackgroundColor3 = Theme.Colors.Button,
+        BorderSizePixel = 0,
+        ClearTextOnFocus = false,
+        Text = "",
+    })
+    New("UICorner", {Parent = searchBox, CornerRadius = UDim.new(0,6)})
+
+    -- Delay Slider (simple TextBox for input, validate 0.1-2.0) - debounced for less frequent parsing
+    local delayBox = New("TextBox", {
+        Parent = frame,
+        Size = createScaledSize(1, -mpad, 0, 28),
+        Position = createScaledPos(pad / currentScale, 122),
+        PlaceholderText = "Delay (s): 0.3",
+        Font = Theme.Font, 
+        TextSize = Theme.TextSize,
+        TextColor3 = Theme.Colors.Text, 
+        BackgroundColor3 = Theme.Colors.Button,
+        BorderSizePixel = 0, 
+        Text = tostring(autoDelay[selectedType]),
+    })
+    New("UICorner", {Parent = delayBox, CornerRadius = UDim.new(0,6)})
+
+    local delayDebounce
+    Connect(delayBox:GetPropertyChangedSignal("Text"), function()
+        if delayDebounce then task.cancel(delayDebounce) end
+        delayDebounce = task.delay(0.15, function()
+            local num = tonumber(delayBox.Text)
+            if num and num >= 0.1 and num <= 2 then
+                autoDelay[selectedType] = num
+                delayBox.Text = tostring(num)
+            else
+                delayBox.Text = tostring(autoDelay[selectedType])
+            end
+            delayDebounce = nil
+        end)
+    end)
+
+    -- Clear & Select All (2 buttons) + Select Both
+    local btnContainer = New("Frame", {
+        Parent = frame, 
+        Position = createScaledPos(pad / currentScale, 155),
+        Size = createScaledSize(1, -mpad, 0, 28), 
+        BackgroundTransparency = 1,
+    })
+    local clearBtn = New("TextButton", {
+        Parent = btnContainer, 
+        Size = UDim2.new(0.33,0,1,0),
+        Text = "Clear Selection", 
+        Font = Theme.Font, 
+        TextSize = Theme.TextSize,
+        BackgroundColor3 = Theme.ColorVariants.error, 
+        TextColor3 = Theme.Colors.Text,
+    })
+    local selectAllBtn = New("TextButton", {
+        Parent = btnContainer, 
+        Position = UDim2.new(0.33, 2 * (tpad / currentScale), 0, 0), 
+        Size = UDim2.new(0.33,0,1,0),
+        Text = "Select All", 
+        Font = Theme.Font, 
+        TextSize = Theme.TextSize,
+        BackgroundColor3 = Theme.ColorVariants.success, 
+        TextColor3 = Theme.Colors.Text,
+    })
+    local selectBothBtn = New("TextButton", {
+        Parent = btnContainer, 
+        Position = UDim2.new(0.66, 2 * (tpad / currentScale), 0, 0), 
+        Size = UDim2.new(0.33,0,1,0),
+        Text = "Select Both", 
+        Font = Theme.Font, 
+        TextSize = Theme.TextSize,
+        BackgroundColor3 = Theme.Colors.Button, 
+        TextColor3 = Theme.Colors.Text,
+    })
+    New("UICorner", {Parent = clearBtn, CornerRadius = UDim.new(0,6)})
+    New("UICorner", {Parent = selectAllBtn, CornerRadius = UDim.new(0,6)})
+    New("UICorner", {Parent = selectBothBtn, CornerRadius = UDim.new(0,6)})
+
+    -- Dropdown list (scaled height)
+    local dropdownList = New("ScrollingFrame", {
+        Parent = frame,
+        Size = createScaledSize(1, -mpad, 0, 150),
+        Position = createScaledPos(pad / currentScale, 190),
+        BackgroundColor3 = Theme.Colors.PanelAlt,
+        ClipsDescendants = true, 
+        ScrollBarThickness = isMobile and 16 or 6,
+        AutomaticCanvasSize = Enum.AutomaticSize.None,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+    })
+    local listLayout = New("UIListLayout", {Parent = dropdownList, Padding = UDim.new(0, 4 * currentScale), SortOrder = Enum.SortOrder.LayoutOrder})
+
+    -- Button pool + connection cleanup (optimized connection storage)
+    local buttonPool = {}
+    local buttonConnections = {}
+    local hoverTween = TweenInfo.new(0.1, Enum.EasingStyle.Quad)
+    local clickTween = TweenInfo.new(0.05, Enum.EasingStyle.Quad)
+    local hoverInProps = {BackgroundColor3 = Color3.fromRGB(180,180,180), Size = UDim2.new(1,-4,0,30)}
+    local hoverOutProps = {BackgroundColor3 = Theme.Colors.Button, Size = UDim2.new(1,-4,0,28)}
+    local clickInProps = {Size = UDim2.new(1,-4,0,26)}
+    local clickOutProps = {Size = UDim2.new(1,-4,0,28)}
+    local function getDropdownButton()
+        local btn = table.remove(buttonPool)
+        if not btn then
+            btn = New("TextButton", {
+                Size = UDim2.new(1, -4 * currentScale, 0, 28 * currentScale),
+                Font = Theme.Font, 
+                TextSize = Theme.TextSize,
+                TextColor3 = Theme.Colors.Text, 
+                BorderSizePixel = 0,
+            })
+            New("UICorner",{Parent=btn, CornerRadius=UDim.new(0,6)})
+        else
+            btn.Size = UDim2.new(1, -4 * currentScale, 0, 28 * currentScale)
+        end
+        btn.Visible = true
+        return btn
+    end
+    local function recycleButton(btn)
+        if buttonConnections[btn] then
+            for _,conn in ipairs(buttonConnections[btn]) do conn:Disconnect() end
+            buttonConnections[btn] = nil
+        end
+        btn.Size = UDim2.new(1, -4 * currentScale, 0, 28 * currentScale)
+        btn.BackgroundColor3 = Theme.Colors.Button
+        btn.Visible, btn.Parent = false, nil
+        table.insert(buttonPool, btn)
+    end
+
+    -- Update dropdown (use pre-lowered for filter)
+    local searchDebounce
+    local function updateDropdownItems()
+        for _,child in ipairs(dropdownList:GetChildren()) do
+            if child:IsA("TextButton") then recycleButton(child) end
+        end
+        local options = selectedType == "Plant" and PlantOptions or GearOptions
+        local optionsLower = selectedType == "Plant" and PlantOptionsLower or GearOptionsLower
+        local currentSelected = selectedPerType[selectedType]
+        local filter = searchBox.Text:lower()
+
+        local filteredIndices = {}
+        for i, _ in ipairs(options) do
+            if filter == "" or optionsLower[i]:find(filter) then
+                table.insert(filteredIndices, i)
+            end
+        end
+
+        local layoutOrder = 1
+        for _, idx in ipairs(filteredIndices) do
+            local item = options[idx]
+            local btn = getDropdownButton()
+            btn.Text = item
+            btn.BackgroundColor3 =
+                table.find(currentSelected, item) and Theme.ColorVariants.success or Theme.Colors.Button
+            btn.LayoutOrder = layoutOrder
+            layoutOrder += 1
+            btn.Parent = dropdownList
+
+            buttonConnections[btn] = {}
+
+            -- Mouse hover effect with tween (cached props)
+            table.insert(buttonConnections[btn], Connect(btn.MouseEnter, function()
+                if not table.find(currentSelected, item) then
+                    TweenService:Create(btn, hoverTween, hoverInProps):Play()
+                end
+            end))
+            table.insert(buttonConnections[btn], Connect(btn.MouseLeave, function()
+                if not table.find(currentSelected, item) then
+                    TweenService:Create(btn, hoverTween, hoverOutProps):Play()
+                end
+            end))
+
+            -- Click selection with animation (non-blocking chain)
+            table.insert(buttonConnections[btn], Connect(btn.MouseButton1Click, function()
+                -- Brief click animation (spawn to avoid blocking)
+                local clickIn = TweenService:Create(btn, clickTween, clickInProps)
+                clickIn:Play()
+                task.spawn(function()
+                    clickIn.Completed:Wait()
+                    TweenService:Create(btn, clickTween, clickOutProps):Play()
+                end)
+
+                local idxSel = table.find(currentSelected, item)
+                if idxSel then
+                    table.remove(currentSelected, idxSel)
+                    btn.BackgroundColor3 = Theme.Colors.Button
+                    Notify("Removed: "..item, "error", 1.5)
+                else
+                    table.insert(currentSelected, item)
+                    btn.BackgroundColor3 = Theme.ColorVariants.success
+                    Notify("Selected: "..item, "success", 1.5)
+                end
+                updateTitle()
+            end))
+        end
+
+        -- Manually set canvas size to exact content height to prevent overscroll
+        dropdownList.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y)
+        updateTitle()
+    end
+
+    -- Search debounce
+    Connect(searchBox:GetPropertyChangedSignal("Text"), function()
+        if searchDebounce then task.cancel(searchDebounce) end
+        searchDebounce = task.delay(0.2, updateDropdownItems)
+    end)
+
+    -- Keyboard shortcuts
+    local keyConn = Connect(UserInputService.InputBegan, function(input, gameProcessed)
+        if gameProcessed then return end
+        if searchBox:IsFocused() and input.KeyCode == Enum.KeyCode.Return then
+            updateDropdownItems()
+        elseif input.KeyCode == Enum.KeyCode.A and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+            -- Trigger select all
+            local options = selectedType == "Plant" and PlantOptions or GearOptions
+            selectedPerType[selectedType] = table.clone(options)
+            updateDropdownItems()
+            Notify("All "..selectedType.." selected","success",1.5)
+        end
+    end)
+
+    -- Clear & Select all
+    Connect(clearBtn.MouseButton1Click, function()
+        selectedPerType[selectedType] = {}
+        updateDropdownItems()
+        Notify("Selection cleared for "..selectedType,"info",1.5)
+    end)
+    Connect(selectAllBtn.MouseButton1Click, function()
+        local options = selectedType == "Plant" and PlantOptions or GearOptions
+        selectedPerType[selectedType] = table.clone(options)
+        updateDropdownItems()
+        Notify("All "..selectedType.." selected","success",1.5)
+    end)
+    Connect(selectBothBtn.MouseButton1Click, function()
+        selectedPerType.Plant = table.clone(PlantOptions)
+        selectedPerType.Gear = table.clone(GearOptions)
+        updateDropdownItems()
+        Notify("All Plants & Gears selected","success",1.5)
+    end)
+
+    -- Auto Buy toggle button (scaled)
+    local autoBtn = New("TextButton", {
+        Parent = frame,
+        Size = createScaledSize(1, -mpad, 0, 36),
+        Position = createScaledPos(pad / currentScale, 350),
+        Text = "Auto Buy: OFF", 
+        Font = Theme.FontBold, 
+        TextSize = math.clamp(16 * currentScale, 14, 20),
+        BackgroundColor3 = Theme.ColorVariants.error, 
+        TextColor3 = Theme.Colors.Text,
+        BorderSizePixel = 0,
+    })
+    New("UICorner", {Parent = autoBtn, CornerRadius = UDim.new(0,6)})
+
+    -- Auto Buy Both button
+    local bothAutoBtn = New("TextButton", {
+        Parent = frame,
+        Size = createScaledSize(1, -mpad, 0, 36),
+        Position = createScaledPos(pad / currentScale, 392),
+        Text = "Auto Buy Both: OFF", 
+        Font = Theme.FontBold, 
+        TextSize = math.clamp(16 * currentScale, 14, 20),
+        BackgroundColor3 = Theme.ColorVariants.error, 
+        TextColor3 = Theme.Colors.Text,
+        BorderSizePixel = 0,
+    })
+    New("UICorner", {Parent = bothAutoBtn, CornerRadius = UDim.new(0,6)})
+
+    local function updateAutoBtn()
+        local typ = selectedType
+        if autoStatePerType[typ] then
+            autoBtn.Text, autoBtn.BackgroundColor3 = "Auto Buy: ON", Theme.ColorVariants.success
+        else
+            autoBtn.Text, autoBtn.BackgroundColor3 = "Auto Buy: OFF", Theme.ColorVariants.error
+        end
+    end
+
+    local function updateBothAutoBtn()
+        local plantOn = autoStatePerType.Plant
+        local gearOn = autoStatePerType.Gear
+        if plantOn and gearOn then
+            bothAutoBtn.Text = "Auto Buy Both: ON"
+            bothAutoBtn.BackgroundColor3 = Theme.ColorVariants.success
+        elseif not plantOn and not gearOn then
+            bothAutoBtn.Text = "Auto Buy Both: OFF"
+            bothAutoBtn.BackgroundColor3 = Theme.ColorVariants.error
+        else
+            bothAutoBtn.Text = "Auto Buy Both: Mixed"
+            bothAutoBtn.BackgroundColor3 = Theme.Colors.Button
+        end
+    end
+
+    local autoLoop = function(typ)
         while autoStatePerType[typ] do
             for _, item in ipairs(selectedPerType[typ]) do
                 for i = 1, 10 do
@@ -843,522 +1177,9 @@ AddTab("AutoBuy", function(parent)
         runningLoops[typ] = false
     end
 
-    -- Load saved state
-    local savedState = LoadAutoBuyState()
-    if savedState then
-        selectedPerType = savedState.selectedPerType or selectedPerType
-        autoStatePerType = savedState.autoStatePerType or autoStatePerType
-        autoDelay = savedState.autoDelay or autoDelay
-        -- Restart loops if saved as on
-        for typ, on in pairs(autoStatePerType) do
-            if on and not runningLoops[typ] then
-                runningLoops[typ] = true
-                task.spawn(function() autoLoop(typ) end)
-            end
-        end
-    end
-
-    -- Initial scale
-    local currentScale = scaleFactor
-
-    -- Frame container (auto-size for responsiveness)
-    local frame = New("Frame", {
-        Parent = parent,
-        Size = UDim2.new(1, 0, 0, 0),
-        BackgroundColor3 = Theme.Colors.PanelAlt,
-        BorderSizePixel = 0,
-        AutomaticSize = Enum.AutomaticSize.Y,
-    })
-    New("UICorner", {Parent = frame, CornerRadius = UDim.new(0,8)})
-
-    local base_gap = 5
-    local base_action_gap = 10
-
-    local titleLabel = New("TextLabel", {
-        Parent = frame,
-        Size = UDim2.new(1, 0, 0, 30 * currentScale),
-        Position = UDim2.new(0, 0, 0, 0),
-        Font = Theme.FontBold,
-        TextSize = math.clamp(16 * currentScale, 12, 20),
-        Text = "Select Items to Auto Buy",
-        TextColor3 = Theme.Colors.Text,
-        BackgroundTransparency = 1,
-        TextXAlignment = Enum.TextXAlignment.Left,
-    })
-
-    -- Type selector
-    local typeSelector = New("Frame", {
-        Parent = frame,
-        Size = UDim2.new(1, 0, 0, 30 * currentScale),
-        Position = UDim2.new(0, 0, 0, 0),
-        BackgroundTransparency = 1,
-    })
-    local plantBtn = New("TextButton", {
-        Parent = typeSelector, 
-        Size = UDim2.new(0.5, 0, 1, 0),
-        Text = "Plant", 
-        Font = Theme.Font, 
-        TextSize = Theme.TextSize,
-        BackgroundColor3 = Theme.Colors.Button, 
-        TextColor3 = Theme.Colors.Text,
-        TextScaled = false,
-    })
-    local gearBtn = New("TextButton", {
-        Parent = typeSelector, 
-        Position = UDim2.new(0.5, base_gap, 0, 0), 
-        Size = UDim2.new(0.5, 0, 1, 0),
-        Text = "Gear", 
-        Font = Theme.Font, 
-        TextSize = Theme.TextSize,
-        BackgroundColor3 = Theme.Colors.Button, 
-        TextColor3 = Theme.Colors.Text,
-        TextScaled = false,
-    })
-    New("UICorner", {Parent = plantBtn, CornerRadius = UDim.new(0,6)})
-    New("UICorner", {Parent = gearBtn, CornerRadius = UDim.new(0,6)})
-
-    -- Search
-    local searchBox = New("TextBox", {
-        Parent = frame,
-        Size = UDim2.new(1, 0, 0, 28 * currentScale),
-        Position = UDim2.new(0, 0, 0, 0),
-        PlaceholderText = "Search...",
-        Font = Theme.Font,
-        TextSize = Theme.TextSize,
-        TextColor3 = Theme.Colors.Text,
-        BackgroundColor3 = Theme.Colors.Button,
-        BorderSizePixel = 0,
-        ClearTextOnFocus = false,
-        Text = "",
-        TextScaled = false,
-    })
-    New("UICorner", {Parent = searchBox, CornerRadius = UDim.new(0,6)})
-
-    -- Delay Box
-    local delayBox = New("TextBox", {
-        Parent = frame,
-        Size = UDim2.new(1, 0, 0, 28 * currentScale),
-        Position = UDim2.new(0, 0, 0, 0),
-        PlaceholderText = "Delay (s): 0.3",
-        Font = Theme.Font, 
-        TextSize = Theme.TextSize,
-        TextColor3 = Theme.Colors.Text, 
-        BackgroundColor3 = Theme.Colors.Button,
-        BorderSizePixel = 0, 
-        Text = tostring(autoDelay[selectedType]),
-        TextScaled = false,
-    })
-    New("UICorner", {Parent = delayBox, CornerRadius = UDim.new(0,6)})
-
-    -- Clear & Select All & Select Both & Clear All
-    local btnContainer = New("Frame", {
-        Parent = frame, 
-        Position = UDim2.new(0, 0, 0, 0),
-        Size = UDim2.new(1, 0, 0, 28 * currentScale), 
-        BackgroundTransparency = 1,
-    })
-    local clearBtn = New("TextButton", {
-        Parent = btnContainer, 
-        Size = UDim2.new(0.25, 0, 1, 0),
-        Position = UDim2.new(0, 0, 0, 0),
-        Text = "Clear Selection", 
-        Font = Theme.Font, 
-        TextSize = Theme.TextSize,
-        BackgroundColor3 = Theme.ColorVariants.error, 
-        TextColor3 = Theme.Colors.Text,
-        TextScaled = true,
-    })
-    local selectAllBtn = New("TextButton", {
-        Parent = btnContainer, 
-        Size = UDim2.new(0.25, 0, 1, 0),
-        Position = UDim2.new(0.25, base_action_gap, 0, 0), 
-        Text = "Select All", 
-        Font = Theme.Font, 
-        TextSize = Theme.TextSize,
-        BackgroundColor3 = Theme.ColorVariants.success, 
-        TextColor3 = Theme.Colors.Text,
-        TextScaled = true,
-    })
-    local selectBothBtn = New("TextButton", {
-        Parent = btnContainer, 
-        Size = UDim2.new(0.25, 0, 1, 0),
-        Position = UDim2.new(0.5, base_action_gap, 0, 0), 
-        Text = "Select Both", 
-        Font = Theme.Font, 
-        TextSize = Theme.TextSize,
-        BackgroundColor3 = Theme.Colors.Button, 
-        TextColor3 = Theme.Colors.Text,
-        TextScaled = true,
-    })
-    local clearAllBtn = New("TextButton", {
-        Parent = btnContainer, 
-        Size = UDim2.new(0.25, 0, 1, 0),
-        Position = UDim2.new(0.75, base_action_gap, 0, 0),
-        Text = "Clear All", 
-        Font = Theme.Font, 
-        TextSize = Theme.TextSize,
-        BackgroundColor3 = Theme.ColorVariants.error, 
-        TextColor3 = Theme.Colors.Text,
-        TextScaled = true,
-    })
-    New("UICorner", {Parent = clearBtn, CornerRadius = UDim.new(0,6)})
-    New("UICorner", {Parent = selectAllBtn, CornerRadius = UDim.new(0,6)})
-    New("UICorner", {Parent = selectBothBtn, CornerRadius = UDim.new(0,6)})
-    New("UICorner", {Parent = clearAllBtn, CornerRadius = UDim.new(0,6)})
-
-    -- Dropdown list (scaled height)
-    local dropdownList = New("ScrollingFrame", {
-        Parent = frame,
-        Size = UDim2.new(1, 0, 0, 150 * currentScale),
-        Position = UDim2.new(0, 0, 0, 0),
-        BackgroundColor3 = Theme.Colors.PanelAlt,
-        ClipsDescendants = true, 
-        ScrollBarThickness = isMobile and 16 or 6,
-        AutomaticCanvasSize = Enum.AutomaticSize.None,
-        CanvasSize = UDim2.new(0, 0, 0, 0),
-    })
-    local listLayout = New("UIListLayout", {Parent = dropdownList, Padding = UDim.new(0, 4 * currentScale), SortOrder = Enum.SortOrder.LayoutOrder})
-
-    -- Auto Buy toggle button (scaled)
-    local autoBtn = New("TextButton", {
-        Parent = frame,
-        Size = UDim2.new(1, 0, 0, 36 * currentScale),
-        Position = UDim2.new(0, 0, 0, 0),
-        Text = "Auto Buy: OFF", 
-        Font = Theme.FontBold, 
-        TextSize = math.clamp(16 * currentScale, 14, 20),
-        BackgroundColor3 = Theme.ColorVariants.error, 
-        TextColor3 = Theme.Colors.Text,
-        BorderSizePixel = 0,
-        TextScaled = true,
-    })
-    New("UICorner", {Parent = autoBtn, CornerRadius = UDim.new(0,6)})
-
-    -- Auto Buy Both button
-    local bothAutoBtn = New("TextButton", {
-        Parent = frame,
-        Size = UDim2.new(1, 0, 0, 36 * currentScale),
-        Position = UDim2.new(0, 0, 0, 0),
-        Text = "Auto Buy Both: OFF", 
-        Font = Theme.FontBold, 
-        TextSize = math.clamp(16 * currentScale, 14, 20),
-        BackgroundColor3 = Theme.ColorVariants.error, 
-        TextColor3 = Theme.Colors.Text,
-        BorderSizePixel = 0,
-        TextScaled = true,
-    })
-    New("UICorner", {Parent = bothAutoBtn, CornerRadius = UDim.new(0,6)})
-
-    -- Status Label
-    local statusLabel = New("TextLabel", {
-        Parent = frame,
-        Size = UDim2.new(1, 0, 0, 24 * currentScale),
-        Position = UDim2.new(0, 0, 0, 0),
-        Font = Theme.Font,
-        TextSize = math.clamp(12 * currentScale, 10, 14),
-        Text = "",
-        TextColor3 = Theme.Colors.Text,
-        BackgroundTransparency = 1,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        TextWrapped = true,
-    })
-
-    -- Button pool + connection cleanup (optimized connection storage)
-    local buttonPool = {}
-    local buttonConnections = {}
-    local hoverTween = TweenInfo.new(0.1, Enum.EasingStyle.Quad)
-    local clickTween = TweenInfo.new(0.05, Enum.EasingStyle.Quad)
-    local hoverInProps = {BackgroundColor3 = Color3.fromRGB(180,180,180), Size = UDim2.new(1, -4, 0, 30 * currentScale)}
-    local hoverOutProps = {BackgroundColor3 = Theme.Colors.Button, Size = UDim2.new(1, -4, 0, 28 * currentScale)}
-    local clickInProps = {Size = UDim2.new(1, -4, 0, 26 * currentScale)}
-    local clickOutProps = {Size = UDim2.new(1, -4, 0, 28 * currentScale)}
-
-    local function getDropdownButton()
-        local btn = table.remove(buttonPool)
-        if not btn then
-            btn = New("TextButton", {
-                Size = UDim2.new(1, -4 * currentScale, 0, 28 * currentScale),
-                Font = Theme.Font, 
-                TextColor3 = Theme.Colors.Text, 
-                BorderSizePixel = 0,
-                TextXAlignment = Enum.TextXAlignment.Left,
-            })
-            New("UICorner",{Parent=btn, CornerRadius=UDim.new(0,6)})
-        else
-            btn.Size = UDim2.new(1, -4 * currentScale, 0, 28 * currentScale)
-            btn.TextXAlignment = Enum.TextXAlignment.Left
-        end
-        btn.Visible = true
-        return btn
-    end
-
-    local function recycleButton(btn)
-        if buttonConnections[btn] then
-            for _,conn in ipairs(buttonConnections[btn]) do 
-                if conn and conn.Disconnect then 
-                    conn:Disconnect() 
-                end
-            end
-            buttonConnections[btn] = nil
-        end
-        btn.Size = UDim2.new(1, -4 * currentScale, 0, 28 * currentScale)
-        btn.BackgroundColor3 = Theme.Colors.Button
-        btn.Visible, btn.Parent = false, nil
-        table.insert(buttonPool, btn)
-    end
-
-    local function updateTitle()
-        local count = #selectedPerType[selectedType]
-        local total = selectedType == "Plant" and #PlantOptions or #GearOptions
-        titleLabel.Text = string.format("Select Items to Auto Buy (%d/%d)", count, total)
-    end
-
-    local function updateStatusLabel()
-        local plantSel = #selectedPerType.Plant
-        local gearSel = #selectedPerType.Gear
-        local plantStatus = autoStatePerType.Plant and "ON" or "OFF"
-        local gearStatus = autoStatePerType.Gear and "ON" or "OFF"
-        statusLabel.Text = string.format("Plants: %d selected (%s) | Gears: %d selected (%s)", plantSel, plantStatus, gearSel, gearStatus)
-    end
-
-    local function updateAutoBtn()
-        if not autoBtn then return end
-        local typ = selectedType
-        if autoStatePerType[typ] then
-            autoBtn.Text = "Auto Buy: ON"
-            autoBtn.BackgroundColor3 = Theme.ColorVariants.success
-        else
-            autoBtn.Text = "Auto Buy: OFF"
-            autoBtn.BackgroundColor3 = Theme.ColorVariants.error
-        end
-        updateStatusLabel()
-    end
-
-    local function updateBothAutoBtn()
-        if not bothAutoBtn then return end
-        local plantOn = autoStatePerType.Plant
-        local gearOn = autoStatePerType.Gear
-        if plantOn and gearOn then
-            bothAutoBtn.Text = "Auto Buy Both: ON"
-            bothAutoBtn.BackgroundColor3 = Theme.ColorVariants.success
-        elseif not plantOn and not gearOn then
-            bothAutoBtn.Text = "Auto Buy Both: OFF"
-            bothAutoBtn.BackgroundColor3 = Theme.ColorVariants.error
-        else
-            bothAutoBtn.Text = "Auto Buy Both: Mixed"
-            bothAutoBtn.BackgroundColor3 = Theme.Colors.Button
-        end
-        updateStatusLabel()
-    end
-
-    local searchDebounce
-    local function updateDropdownItems()
-        for _,child in ipairs(dropdownList:GetChildren()) do
-            if child:IsA("TextButton") then recycleButton(child) end
-        end
-        local options = selectedType == "Plant" and PlantOptions or GearOptions
-        local optionsLower = selectedType == "Plant" and PlantOptionsLower or GearOptionsLower
-        local currentSelected = selectedPerType[selectedType]
-        local filter = searchBox.Text:lower()
-
-        local filteredIndices = {}
-        for i, _ in ipairs(options) do
-            if filter == "" or optionsLower[i]:find(filter) then
-                table.insert(filteredIndices, i)
-            end
-        end
-
-        local layoutOrder = 1
-        for _, idx in ipairs(filteredIndices) do
-            local item = options[idx]
-            local isSelected = table.find(currentSelected, item) ~= nil
-            local btn = getDropdownButton()
-            btn.Text = (isSelected and "✓ " or "") .. item
-            btn.BackgroundColor3 = isSelected and Theme.ColorVariants.success or Theme.Colors.Button
-            btn.TextSize = regularTextSize
-            btn.LayoutOrder = layoutOrder
-            layoutOrder += 1
-            btn.Parent = dropdownList
-
-            buttonConnections[btn] = {}
-
-            -- Mouse hover effect with tween (cached props)
-            table.insert(buttonConnections[btn], Connect(btn.MouseEnter, function()
-                if not isSelected then
-                    TweenService:Create(btn, hoverTween, hoverInProps):Play()
-                end
-            end))
-            table.insert(buttonConnections[btn], Connect(btn.MouseLeave, function()
-                if not isSelected then
-                    TweenService:Create(btn, hoverTween, hoverOutProps):Play()
-                end
-            end))
-
-            -- Click selection with animation (non-blocking chain)
-            table.insert(buttonConnections[btn], Connect(btn.MouseButton1Click, function()
-                HapticClick()
-                -- Brief click animation (spawn to avoid blocking)
-                local clickIn = TweenService:Create(btn, clickTween, clickInProps)
-                clickIn:Play()
-                task.spawn(function()
-                    clickIn.Completed:Wait()
-                    TweenService:Create(btn, clickTween, clickOutProps):Play()
-                end)
-
-                local idxSel = table.find(currentSelected, item)
-                if idxSel then
-                    table.remove(currentSelected, idxSel)
-                    btn.BackgroundColor3 = Theme.Colors.Button
-                    btn.Text = item
-                    Notify("Removed: "..item, "error", 1.5)
-                else
-                    table.insert(currentSelected, item)
-                    btn.BackgroundColor3 = Theme.ColorVariants.success
-                    btn.Text = "✓ " .. item
-                    Notify("Selected: "..item, "success", 1.5)
-                end
-                updateTitle()
-                updateStatusLabel()
-                SaveAutoBuyState({selectedPerType = selectedPerType, autoStatePerType = autoStatePerType, autoDelay = autoDelay})
-            end))
-        end
-
-        -- Manually set canvas size to exact content height to prevent overscroll
-        dropdownList.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y)
-        updateTitle()
-    end
-
-    -- Hover effects for type buttons
-    local typeHoverTween = TweenInfo.new(0.1, Enum.EasingStyle.Quad)
-    local typeHoverIn = {BackgroundColor3 = Theme.Colors.ButtonActive}
-    local typeHoverOut = {BackgroundColor3 = Theme.Colors.Button}
-    local function addTypeHover(btn)
-        Connect(btn.MouseEnter, function()
-            TweenService:Create(btn, typeHoverTween, typeHoverIn):Play()
-        end)
-        Connect(btn.MouseLeave, function()
-            TweenService:Create(btn, typeHoverTween, typeHoverOut):Play()
-        end)
-    end
-    addTypeHover(plantBtn)
-    addTypeHover(gearBtn)
-
-    -- Hover effects for action buttons
-    local actionHoverTween = TweenInfo.new(0.1, Enum.EasingStyle.Quad)
-    local actionHoverIn = {BackgroundColor3 = Theme.Colors.ButtonActive}
-    local function actionHoverOut(btn)
-        if btn == clearBtn or btn == clearAllBtn then
-            return {BackgroundColor3 = Theme.ColorVariants.error}
-        elseif btn == selectAllBtn then
-            return {BackgroundColor3 = Theme.ColorVariants.success}
-        else
-            return {BackgroundColor3 = Theme.Colors.Button}
-        end
-    end
-    local function addActionHover(btn)
-        if not btn then return end
-        Connect(btn.MouseEnter, function()
-            TweenService:Create(btn, actionHoverTween, actionHoverIn):Play()
-        end)
-        Connect(btn.MouseLeave, function()
-            TweenService:Create(btn, actionHoverTween, actionHoverOut(btn)):Play()
-        end)
-    end
-    addActionHover(clearBtn)
-    addActionHover(selectAllBtn)
-    addActionHover(selectBothBtn)
-    addActionHover(clearAllBtn)
-    addActionHover(autoBtn)
-    addActionHover(bothAutoBtn)
-
-    -- Search debounce
-    Connect(searchBox:GetPropertyChangedSignal("Text"), function()
-        if searchDebounce then task.cancel(searchDebounce) end
-        searchDebounce = task.delay(0.2, updateDropdownItems)
-    end)
-
-    -- Delay validation on focus lost
-    Connect(delayBox.FocusLost, function()
-        local num = tonumber(delayBox.Text)
-        if num and num >= 0.1 and num <= 2 then
-            autoDelay[selectedType] = num
-        else
-            delayBox.Text = tostring(autoDelay[selectedType])
-            Notify("Invalid delay, using " .. autoDelay[selectedType] .. "s", "error", 2)
-        end
-        SaveAutoBuyState({selectedPerType = selectedPerType, autoStatePerType = autoStatePerType, autoDelay = autoDelay})
-    end)
-
-    -- Keyboard shortcuts
-    local keyConn = Connect(UserInputService.InputBegan, function(input, gameProcessed)
-        if gameProcessed then return end
-        if searchBox:IsFocused() and input.KeyCode == Enum.KeyCode.Return then
-            updateDropdownItems()
-        elseif input.KeyCode == Enum.KeyCode.A and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-            HapticClick()
-            -- Trigger select all
-            local options = selectedType == "Plant" and PlantOptions or GearOptions
-            selectedPerType[selectedType] = {}
-            for _, v in ipairs(options) do
-                table.insert(selectedPerType[selectedType], v)
-            end
-            updateDropdownItems()
-            Notify("All "..selectedType.." selected","success",1.5)
-            updateStatusLabel()
-            SaveAutoBuyState({selectedPerType = selectedPerType, autoStatePerType = autoStatePerType, autoDelay = autoDelay})
-        end
-    end)
-
-    -- Clear & Select all
-    Connect(clearBtn.MouseButton1Click, function()
-        HapticClick()
-        selectedPerType[selectedType] = {}
-        updateDropdownItems()
-        Notify("Selection cleared for "..selectedType,"info",1.5)
-        updateStatusLabel()
-        SaveAutoBuyState({selectedPerType = selectedPerType, autoStatePerType = autoStatePerType, autoDelay = autoDelay})
-    end)
-    Connect(selectAllBtn.MouseButton1Click, function()
-        HapticClick()
-        local options = selectedType == "Plant" and PlantOptions or GearOptions
-        selectedPerType[selectedType] = {}
-        for _, v in ipairs(options) do
-            table.insert(selectedPerType[selectedType], v)
-        end
-        updateDropdownItems()
-        Notify("All "..selectedType.." selected","success",1.5)
-        updateStatusLabel()
-        SaveAutoBuyState({selectedPerType = selectedPerType, autoStatePerType = autoStatePerType, autoDelay = autoDelay})
-    end)
-    Connect(selectBothBtn.MouseButton1Click, function()
-        HapticClick()
-        selectedPerType.Plant = {}
-        selectedPerType.Gear = {}
-        for _, v in ipairs(PlantOptions) do
-            table.insert(selectedPerType.Plant, v)
-        end
-        for _, v in ipairs(GearOptions) do
-            table.insert(selectedPerType.Gear, v)
-        end
-        updateDropdownItems()
-        Notify("All Plants & Gears selected","success",1.5)
-        updateStatusLabel()
-        SaveAutoBuyState({selectedPerType = selectedPerType, autoStatePerType = autoStatePerType, autoDelay = autoDelay})
-    end)
-    Connect(clearAllBtn.MouseButton1Click, function()
-        HapticClick()
-        selectedPerType.Plant = {}
-        selectedPerType.Gear = {}
-        updateDropdownItems()
-        Notify("All selections cleared","error",1.5)
-        updateStatusLabel()
-        SaveAutoBuyState({selectedPerType = selectedPerType, autoStatePerType = autoStatePerType, autoDelay = autoDelay})
-    end)
-
     -- Optimized toggle with debounce for single
     local toggleDebounce
     Connect(autoBtn.MouseButton1Click, function()
-        HapticClick()
         if toggleDebounce then return end
         toggleDebounce = task.delay(0.1, function() toggleDebounce = nil end)
         
@@ -1375,13 +1196,11 @@ AddTab("AutoBuy", function(parent)
         end
         updateAutoBtn()
         updateBothAutoBtn()
-        SaveAutoBuyState({selectedPerType = selectedPerType, autoStatePerType = autoStatePerType, autoDelay = autoDelay})
     end)
 
     -- Toggle for both with debounce
     local bothToggleDebounce
     Connect(bothAutoBtn.MouseButton1Click, function()
-        HapticClick()
         if bothToggleDebounce then return end
         bothToggleDebounce = task.delay(0.1, function() bothToggleDebounce = nil end)
         
@@ -1410,35 +1229,30 @@ AddTab("AutoBuy", function(parent)
         end
         updateAutoBtn()
         updateBothAutoBtn()
-        SaveAutoBuyState({selectedPerType = selectedPerType, autoStatePerType = autoStatePerType, autoDelay = autoDelay})
     end)
 
     -- Type switching with debounce and clear search
     local switchDebounce
     Connect(plantBtn.MouseButton1Click, function()
-        HapticClick()
         if switchDebounce then return end
         switchDebounce = task.delay(0.1, function() switchDebounce = nil end)
         if selectedType ~= "Plant" then
             selectedType = "Plant"
             searchBox.Text = ""
             delayBox.Text = tostring(autoDelay[selectedType])
-            updateDropdownItems()
-            updateAutoBtn()
+            updateDropdownItems(); updateAutoBtn()
             updateBothAutoBtn()
             Notify("Switched to Plants","info",1.5)
         end
     end)
     Connect(gearBtn.MouseButton1Click, function()
-        HapticClick()
         if switchDebounce then return end
         switchDebounce = task.delay(0.1, function() switchDebounce = nil end)
         if selectedType ~= "Gear" then
             selectedType = "Gear"
             searchBox.Text = ""
             delayBox.Text = tostring(autoDelay[selectedType])
-            updateDropdownItems()
-            updateAutoBtn()
+            updateDropdownItems(); updateAutoBtn()
             updateBothAutoBtn()
             Notify("Switched to Gears","info",1.5)
         end
@@ -1448,166 +1262,76 @@ AddTab("AutoBuy", function(parent)
     local viewportConnection
     local function updateAutoBuySizes()
         local screenSize = workspace.CurrentCamera.ViewportSize
-        local refWidth, refHeight
-        if isMobile then
-            if screenSize.X < screenSize.Y then
-                refWidth = 375
-                refHeight = 812
-            else
-                refWidth = 812
-                refHeight = 375
-            end
-        else
-            refWidth = 1920
-            refHeight = 1080
-        end
-        local scaleX = screenSize.X / refWidth
-        local scaleY = screenSize.Y / refHeight
+        local scaleX = screenSize.X / 1920
+        local scaleY = screenSize.Y / 1080
         local newScale = math.min(scaleX, scaleY)
         currentScale = newScale
 
-        local minText = isMobile and 16 or 12
-        local textMultiplier = currentScale
-        regularTextSize = math.clamp(14 * textMultiplier, minText, 18)
-        boldTextSize = math.clamp(16 * textMultiplier, minText + 2, 20)
-        smallTextSize = math.clamp(12 * textMultiplier, minText - 2, 16)
+        local pad = 10 * newScale
+        local mpad = 20 * newScale
+        local tpad = 5 * newScale
 
-        local minPad = isMobile and 12 or 8
-        local pad = math.max(10 * currentScale, minPad)
-        local mpad = math.max(20 * currentScale, minPad * 2)
-        local gap = math.max(8 * currentScale, isMobile and 12 or 6)
-        local smallGap = gap / 2
-        local typeGapScale = 0.01 * currentScale
-        local actionGapScale = 0.02 * currentScale
-
-        local yOffset = 0
+        -- Frame auto-sizes, no need to update
 
         -- Title
-        local titleH = math.max(30 * currentScale, isMobile and 40 or 30)
-        titleLabel.Position = UDim2.new(0, pad, 0, yOffset + pad)
-        titleLabel.Size = UDim2.new(1, -mpad, 0, titleH)
-        titleLabel.TextSize = boldTextSize
-        yOffset = yOffset + titleH + gap
+        titleLabel.Position = UDim2.new(0, pad, 0, pad)
+        titleLabel.Size = UDim2.new(1, -mpad, 0, 30 * newScale)
+        titleLabel.TextSize = math.clamp(16 * newScale, 12, 20)
 
         -- Type selector
-        local typeH = math.max(30 * currentScale, isMobile and 44 or 30)
-        local typeBtnScale = (1 - typeGapScale) / 2
-        typeSelector.Position = UDim2.new(0, pad, 0, yOffset)
-        typeSelector.Size = UDim2.new(1, -mpad, 0, typeH)
-        plantBtn.Size = UDim2.new(typeBtnScale, 0, 1, 0)
-        plantBtn.TextSize = regularTextSize
-        gearBtn.Size = UDim2.new(typeBtnScale, 0, 1, 0)
-        gearBtn.Position = UDim2.new(typeBtnScale + typeGapScale, 0, 0, 0)
-        gearBtn.TextSize = regularTextSize
-        yOffset = yOffset + typeH + gap
+        typeSelector.Position = UDim2.new(0, pad, 0, 50 * newScale)
+        typeSelector.Size = UDim2.new(1, -mpad, 0, 30 * newScale)
+        plantBtn.Size = UDim2.new(0.5, -tpad, 1, 0)
+        gearBtn.Position = UDim2.new(0.5, tpad, 0, 0)
+        gearBtn.Size = UDim2.new(0.5, -tpad, 1, 0)
+        plantBtn.TextSize = Theme.TextSize
+        gearBtn.TextSize = Theme.TextSize
 
         -- Search
-        local inputH = math.max(28 * currentScale, isMobile and 44 or 28)
-        searchBox.Position = UDim2.new(0, pad, 0, yOffset)
-        searchBox.Size = UDim2.new(1, -mpad, 0, inputH)
-        searchBox.TextSize = regularTextSize
-        yOffset = yOffset + inputH + smallGap
+        searchBox.Position = UDim2.new(0, pad, 0, 90 * newScale)
+        searchBox.Size = UDim2.new(1, -mpad, 0, 28 * newScale)
+        searchBox.TextSize = Theme.TextSize
 
         -- Delay
-        delayBox.Position = UDim2.new(0, pad, 0, yOffset)
-        delayBox.Size = UDim2.new(1, -mpad, 0, inputH)
-        delayBox.TextSize = regularTextSize
-        yOffset = yOffset + inputH + gap
+        delayBox.Position = UDim2.new(0, pad, 0, 122 * newScale)
+        delayBox.Size = UDim2.new(1, -mpad, 0, 28 * newScale)
+        delayBox.TextSize = Theme.TextSize
 
         -- Btn container
-        local actionH = math.max(28 * currentScale, isMobile and 44 or 28)
-        btnContainer.Position = UDim2.new(0, pad, 0, yOffset)
-        if isMobile then
-            local actionLayout = btnContainer:FindFirstChild("ActionLayout")
-            if not actionLayout then
-                actionLayout = New("UIListLayout", {
-                    Name = "ActionLayout",
-                    Parent = btnContainer,
-                    Padding = UDim.new(0, smallGap),
-                    SortOrder = Enum.SortOrder.LayoutOrder,
-                    FillDirection = Enum.FillDirection.Vertical,
-                })
-            end
-            actionLayout.Padding = UDim.new(0, smallGap)
-            btnContainer.AutomaticSize = Enum.AutomaticSize.Y
-            btnContainer.Size = UDim2.new(1, -mpad, 0, 0)
-            clearBtn.Position = UDim2.new(0, 0, 0, 0)
-            clearBtn.Size = UDim2.new(1, 0, 0, 0)
-            clearBtn.AutomaticSize = Enum.AutomaticSize.Y
-            clearBtn.TextSize = regularTextSize
-            selectAllBtn.Position = UDim2.new(0, 0, 0, 0)
-            selectAllBtn.Size = UDim2.new(1, 0, 0, 0)
-            selectAllBtn.AutomaticSize = Enum.AutomaticSize.Y
-            selectAllBtn.TextSize = regularTextSize
-            selectBothBtn.Position = UDim2.new(0, 0, 0, 0)
-            selectBothBtn.Size = UDim2.new(1, 0, 0, 0)
-            selectBothBtn.AutomaticSize = Enum.AutomaticSize.Y
-            selectBothBtn.TextSize = regularTextSize
-            clearAllBtn.Position = UDim2.new(0, 0, 0, 0)
-            clearAllBtn.Size = UDim2.new(1, 0, 0, 0)
-            clearAllBtn.AutomaticSize = Enum.AutomaticSize.Y
-            clearAllBtn.TextSize = regularTextSize
-            local stackedActionH = actionH * 4 + smallGap * 3
-            yOffset = yOffset + stackedActionH + gap
-        else
-            if btnContainer:FindFirstChild("ActionLayout") then
-                btnContainer.ActionLayout:Destroy()
-            end
-            btnContainer.AutomaticSize = Enum.AutomaticSize.None
-            btnContainer.Size = UDim2.new(1, -mpad, 0, actionH)
-            local actionBtnScale = (1 - 3 * actionGapScale) / 4
-            clearBtn.Position = UDim2.new(0, 0, 0, 0)
-            clearBtn.Size = UDim2.new(actionBtnScale, 0, 1, 0)
-            clearBtn.TextSize = regularTextSize
-            selectAllBtn.Position = UDim2.new(actionBtnScale + actionGapScale, 0, 0, 0)
-            selectAllBtn.Size = UDim2.new(actionBtnScale, 0, 1, 0)
-            selectAllBtn.TextSize = regularTextSize
-            selectBothBtn.Position = UDim2.new(2 * (actionBtnScale + actionGapScale), 0, 0, 0)
-            selectBothBtn.Size = UDim2.new(actionBtnScale, 0, 1, 0)
-            selectBothBtn.TextSize = regularTextSize
-            clearAllBtn.Position = UDim2.new(3 * (actionBtnScale + actionGapScale), 0, 0, 0)
-            clearAllBtn.Size = UDim2.new(actionBtnScale, 0, 1, 0)
-            clearAllBtn.TextSize = regularTextSize
-            yOffset = yOffset + actionH + gap
-        end
+        btnContainer.Position = UDim2.new(0, pad, 0, 155 * newScale)
+        btnContainer.Size = UDim2.new(1, -mpad, 0, 28 * newScale)
+        clearBtn.Size = UDim2.new(0.33, 0, 1, 0)
+        selectAllBtn.Position = UDim2.new(0.33, 2 * tpad, 0, 0)
+        selectAllBtn.Size = UDim2.new(0.33, 0, 1, 0)
+        selectBothBtn.Position = UDim2.new(0.66, 2 * tpad, 0, 0)
+        selectBothBtn.Size = UDim2.new(0.33, 0, 1, 0)
+        clearBtn.TextSize = Theme.TextSize
+        selectAllBtn.TextSize = Theme.TextSize
+        selectBothBtn.TextSize = Theme.TextSize
 
         -- Dropdown
-        local listH = math.max(150 * currentScale, isMobile and 250 or 150)
-        dropdownList.Position = UDim2.new(0, pad, 0, yOffset)
-        dropdownList.Size = UDim2.new(1, -mpad, 0, listH)
-        listLayout.Padding = UDim.new(0, math.max(4 * currentScale, isMobile and 8 or 4))
-        dropdownList.ScrollBarThickness = isMobile and math.max(20 * currentScale, 20) or math.max(6 * currentScale, 6)
-        local listBtnH = math.max(32 * currentScale, isMobile and 48 or 32)
-        hoverInProps.Size = UDim2.new(1, -4 * currentScale, 0, listBtnH + 2 * currentScale)
-        hoverOutProps.Size = UDim2.new(1, -4 * currentScale, 0, listBtnH)
-        clickInProps.Size = UDim2.new(1, -4 * currentScale, 0, listBtnH - 4 * currentScale)
-        clickOutProps.Size = UDim2.new(1, -4 * currentScale, 0, listBtnH)
+        dropdownList.Position = UDim2.new(0, pad, 0, 190 * newScale)
+        dropdownList.Size = UDim2.new(1, -mpad, 0, 150 * newScale)
+        listLayout.Padding = UDim.new(0, 4 * newScale)
+        dropdownList.ScrollBarThickness = isMobile and math.max(16 * newScale, 8) or math.max(6 * newScale, 4)
+
+        -- Update existing dropdown buttons
         for _, child in ipairs(dropdownList:GetChildren()) do
             if child:IsA("TextButton") then
-                child.Size = UDim2.new(1, -4 * currentScale, 0, listBtnH)
-                child.TextSize = regularTextSize
+                child.Size = UDim2.new(1, -4 * newScale, 0, 28 * newScale)
+                child.TextSize = Theme.TextSize
             end
         end
-        yOffset = yOffset + listH + gap
 
         -- Auto btn
-        local toggleH = math.max(36 * currentScale, isMobile and 50 or 36)
-        autoBtn.Position = UDim2.new(0, pad, 0, yOffset)
-        autoBtn.Size = UDim2.new(1, -mpad, 0, toggleH)
-        autoBtn.TextSize = boldTextSize
-        yOffset = yOffset + toggleH + smallGap
+        autoBtn.Position = UDim2.new(0, pad, 0, 350 * newScale)
+        autoBtn.Size = UDim2.new(1, -mpad, 0, 36 * newScale)
+        autoBtn.TextSize = math.clamp(16 * newScale, 14, 20)
 
         -- Both btn
-        bothAutoBtn.Position = UDim2.new(0, pad, 0, yOffset)
-        bothAutoBtn.Size = UDim2.new(1, -mpad, 0, toggleH)
-        bothAutoBtn.TextSize = boldTextSize
-        yOffset = yOffset + toggleH + gap
-
-        -- Status label
-        local statusH = math.max(24 * currentScale, isMobile and 28 or 20)
-        statusLabel.Position = UDim2.new(0, pad, 0, yOffset)
-        statusLabel.Size = UDim2.new(1, -mpad, 0, statusH)
-        statusLabel.TextSize = smallTextSize
+        bothAutoBtn.Position = UDim2.new(0, pad, 0, 392 * newScale)
+        bothAutoBtn.Size = UDim2.new(1, -mpad, 0, 36 * newScale)
+        bothAutoBtn.TextSize = math.clamp(16 * newScale, 14, 20)
 
         -- Recalculate dropdown canvas after resize
         updateDropdownItems()
@@ -1617,35 +1341,26 @@ AddTab("AutoBuy", function(parent)
 
     -- Initial update
     updateAutoBuySizes()
-    updateDropdownItems()
-    updateAutoBtn()
-    updateBothAutoBtn()
-    updateStatusLabel()
 
-    -- Cleanup on destroy + save
+    -- Cleanup on destroy
     local cleanupConn
     cleanupConn = frame.AncestryChanged:Connect(function()
         if not frame.Parent then
-            -- Stop all loops on destroy
-            for typ, _ in pairs(autoStatePerType) do
-                autoStatePerType[typ] = false
-            end
             for btn, conns in pairs(buttonConnections) do
-                for _, conn in ipairs(conns) do 
-                    if conn and conn.Disconnect then 
-                        conn:Disconnect() 
-                    end
-                end
+                for _, conn in ipairs(conns) do conn:Disconnect() end
             end
             buttonConnections = {}
             if keyConn then keyConn:Disconnect() end
             if viewportConnection then viewportConnection:Disconnect() end
             if cleanupConn then cleanupConn:Disconnect() end
-            -- Final save
-            SaveAutoBuyState({selectedPerType = selectedPerType, autoStatePerType = autoStatePerType, autoDelay = autoDelay})
         end
     end)
+
+    updateDropdownItems()
+    updateAutoBtn()
+    updateBothAutoBtn()
 end)
+
 
 -- Initial scroll updates
 UpdateScrollBar(leftScroll)
