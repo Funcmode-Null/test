@@ -213,7 +213,7 @@ local function MakeUI()
         Parent=screenGui,
         AnchorPoint=isMobile and Vector2.new(1,0) or Vector2.new(1,1),
         Size=isMobile and UDim2.new(0,250,0,150) or UDim2.new(0,280,0,200),
-        Position=isMobile and UDim2.new(1,0,0,0) or UDim2.new(1,-12,1,-12),
+        Position=isMobile and UDim2.new(1,-12,0,12) or UDim2.new(1,-12,1,-12),
         BackgroundTransparency=1,
         ClipsDescendants=true
     })
@@ -540,8 +540,12 @@ Connect(btnMin.MouseButton1Click, function()
 end)
 Connect(btnClose.MouseButton1Click, function()
     HapticClick()
-    CleanupConnections()
-    UI.screenGui:Destroy()
+    if not isMobile then
+        CleanupConnections()
+        UI.screenGui:Destroy()
+    else
+        main.Visible = false
+    end
 end)
 
 -- Hotkey toggle
