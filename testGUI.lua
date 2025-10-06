@@ -1,4 +1,3 @@
-
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
@@ -894,9 +893,12 @@ AddTab("AutoBuy", function(parent)
             local num = tonumber(delayBox.Text)
             if num and num >= 0.1 and num <= 2 then
                 autoDelay[selectedType] = num
-                delayBox.Text = tostring(num)
             else
-                delayBox.Text = tostring(autoDelay[selectedType])
+                if delayBox.Text == "" then
+                    autoDelay[selectedType] = 0.3
+                else
+                    delayBox.Text = tostring(autoDelay[selectedType])
+                end
             end
             delayDebounce = nil
         end)
@@ -960,15 +962,12 @@ AddTab("AutoBuy", function(parent)
     local buttonConnections = {}
     local hoverTween = TweenInfo.new(0.1, Enum.EasingStyle.Quad)
     local clickTween = TweenInfo.new(0.05, Enum.EasingStyle.Quad)
-    local hoverInProps = {BackgroundColor3 = Color3.fromRGB(180,180,180), Size = UDim2.new(1,-4,0,30)}
-    local hoverOutProps = {BackgroundColor3 = Theme.Colors.Button, Size = UDim2.new(1,-4,0,28)}
-    local clickInProps = {Size = UDim2.new(1,-4,0,26)}
-    local clickOutProps = {Size = UDim2.new(1,-4,0,28)}
     local function getDropdownButton()
         local btn = table.remove(buttonPool)
+        local baseBtnH = math.max(28 * currentScale, 48)
         if not btn then
             btn = New("TextButton", {
-                Size = UDim2.new(1, -4 * currentScale, 0, 28 * currentScale),
+                Size = UDim2.new(1, -4 * currentScale, 0, baseBtnH),
                 Font = Theme.Font, 
                 TextSize = Theme.TextSize,
                 TextColor3 = Theme.Colors.Text, 
@@ -976,17 +975,18 @@ AddTab("AutoBuy", function(parent)
             })
             New("UICorner",{Parent=btn, CornerRadius=UDim.new(0,6)})
         else
-            btn.Size = UDim2.new(1, -4 * currentScale, 0, 28 * currentScale)
+            btn.Size = UDim2.new(1, -4 * currentScale, 0, baseBtnH)
         end
         btn.Visible = true
-        return btn
+        return btn, baseBtnH
     end
     local function recycleButton(btn)
         if buttonConnections[btn] then
             for _,conn in ipairs(buttonConnections[btn]) do conn:Disconnect() end
             buttonConnections[btn] = nil
         end
-        btn.Size = UDim2.new(1, -4 * currentScale, 0, 28 * currentScale)
+        local baseBtnH = math.max(28 * currentScale, 48)
+        btn.Size = UDim2.new(1, -4 * currentScale, 0, baseBtnH)
         btn.BackgroundColor3 = Theme.Colors.Button
         btn.Visible, btn.Parent = false, nil
         table.insert(buttonPool, btn)
@@ -1013,7 +1013,9 @@ AddTab("AutoBuy", function(parent)
         local layoutOrder = 1
         for _, idx in ipairs(filteredIndices) do
             local item = options[idx]
-            local btn = getDropdownButton()
+            local btn, baseBtnH = getDropdownButton()
+            local hoverH = baseBtnH + 2 * currentScale
+            local clickH = baseBtnH - 2 * currentScale
             btn.Text = item
             btn.BackgroundColor3 =
                 table.find(currentSelected, item) and Theme.ColorVariants.success or Theme.Colors.Button
@@ -1026,23 +1028,23 @@ AddTab("AutoBuy", function(parent)
             -- Mouse hover effect with tween (cached props)
             table.insert(buttonConnections[btn], Connect(btn.MouseEnter, function()
                 if not table.find(currentSelected, item) then
-                    TweenService:Create(btn, hoverTween, hoverInProps):Play()
+                    TweenService:Create(btn, hoverTween, {BackgroundColor3 = Color3.fromRGB(180,180,180), Size = UDim2.new(1, -4 * currentScale, 0, hoverH)}):Play()
                 end
             end))
             table.insert(buttonConnections[btn], Connect(btn.MouseLeave, function()
                 if not table.find(currentSelected, item) then
-                    TweenService:Create(btn, hoverTween, hoverOutProps):Play()
+                    TweenService:Create(btn, hoverTween, {BackgroundColor3 = Theme.Colors.Button, Size = UDim2.new(1, -4 * currentScale, 0, baseBtnH)}):Play()
                 end
             end))
 
             -- Click selection with animation (non-blocking chain)
             table.insert(buttonConnections[btn], Connect(btn.MouseButton1Click, function()
                 -- Brief click animation (spawn to avoid blocking)
-                local clickIn = TweenService:Create(btn, clickTween, clickInProps)
+                local clickIn = TweenService:Create(btn, clickTween, {Size = UDim2.new(1, -4 * currentScale, 0, clickH)})
                 clickIn:Play()
                 task.spawn(function()
                     clickIn.Completed:Wait()
-                    TweenService:Create(btn, clickTween, clickOutProps):Play()
+                    TweenService:Create(btn, clickTween, {Size = UDim2.new(1, -4 * currentScale, 0, baseBtnH)}):Play()
                 end)
 
                 local idxSel = table.find(currentSelected, item)
@@ -1270,68 +1272,81 @@ AddTab("AutoBuy", function(parent)
         local pad = 10 * newScale
         local mpad = 20 * newScale
         local tpad = 5 * newScale
+        local minTap = 48  -- Minimum tap target size in pixels
+        local gap = 12 * newScale  -- Gap between elements
 
-        -- Frame auto-sizes, no need to update
+        -- Calculate text sizes for mobile
+        local baseTextSize = Theme.TextSize
+        local ts = isMobile and math.max(baseTextSize * 1.2, 16) or baseTextSize
+        local titleTs = math.clamp(18 * newScale * (isMobile and 1.2 or 1), 14, 24)
+
+        -- Cumulative positioning
+        local currentY = pad
 
         -- Title
-        titleLabel.Position = UDim2.new(0, pad, 0, pad)
-        titleLabel.Size = UDim2.new(1, -mpad, 0, 30 * newScale)
-        titleLabel.TextSize = math.clamp(16 * newScale, 12, 20)
+        titleLabel.Position = UDim2.new(0, pad, 0, currentY)
+        local titleH = math.max(24 * newScale, 32)
+        titleLabel.Size = UDim2.new(1, -mpad, 0, titleH)
+        titleLabel.TextSize = titleTs
+        currentY = currentY + titleH + gap
 
         -- Type selector
-        typeSelector.Position = UDim2.new(0, pad, 0, 50 * newScale)
-        typeSelector.Size = UDim2.new(1, -mpad, 0, 30 * newScale)
+        typeSelector.Position = UDim2.new(0, pad, 0, currentY)
+        local typeH = math.max(30 * newScale, minTap)
+        typeSelector.Size = UDim2.new(1, -mpad, 0, typeH)
         plantBtn.Size = UDim2.new(0.5, -tpad, 1, 0)
         gearBtn.Position = UDim2.new(0.5, tpad, 0, 0)
         gearBtn.Size = UDim2.new(0.5, -tpad, 1, 0)
-        plantBtn.TextSize = Theme.TextSize
-        gearBtn.TextSize = Theme.TextSize
+        plantBtn.TextSize = ts
+        gearBtn.TextSize = ts
+        currentY = currentY + typeH + gap
 
         -- Search
-        searchBox.Position = UDim2.new(0, pad, 0, 90 * newScale)
-        searchBox.Size = UDim2.new(1, -mpad, 0, 28 * newScale)
-        searchBox.TextSize = Theme.TextSize
+        searchBox.Position = UDim2.new(0, pad, 0, currentY)
+        local inputH = math.max(28 * newScale, minTap)
+        searchBox.Size = UDim2.new(1, -mpad, 0, inputH)
+        searchBox.TextSize = ts
+        currentY = currentY + inputH + gap
 
         -- Delay
-        delayBox.Position = UDim2.new(0, pad, 0, 122 * newScale)
-        delayBox.Size = UDim2.new(1, -mpad, 0, 28 * newScale)
-        delayBox.TextSize = Theme.TextSize
+        delayBox.Position = UDim2.new(0, pad, 0, currentY)
+        delayBox.Size = UDim2.new(1, -mpad, 0, inputH)
+        delayBox.TextSize = ts
+        currentY = currentY + inputH + gap
 
         -- Btn container
-        btnContainer.Position = UDim2.new(0, pad, 0, 155 * newScale)
-        btnContainer.Size = UDim2.new(1, -mpad, 0, 28 * newScale)
+        btnContainer.Position = UDim2.new(0, pad, 0, currentY)
+        local btnH = math.max(28 * newScale, minTap)
+        btnContainer.Size = UDim2.new(1, -mpad, 0, btnH)
         clearBtn.Size = UDim2.new(0.33, 0, 1, 0)
         selectAllBtn.Position = UDim2.new(0.33, 2 * tpad, 0, 0)
         selectAllBtn.Size = UDim2.new(0.33, 0, 1, 0)
         selectBothBtn.Position = UDim2.new(0.66, 2 * tpad, 0, 0)
         selectBothBtn.Size = UDim2.new(0.33, 0, 1, 0)
-        clearBtn.TextSize = Theme.TextSize
-        selectAllBtn.TextSize = Theme.TextSize
-        selectBothBtn.TextSize = Theme.TextSize
+        clearBtn.TextSize = ts
+        selectAllBtn.TextSize = ts
+        selectBothBtn.TextSize = ts
+        currentY = currentY + btnH + gap
 
         -- Dropdown
-        dropdownList.Position = UDim2.new(0, pad, 0, 190 * newScale)
-        dropdownList.Size = UDim2.new(1, -mpad, 0, 150 * newScale)
-        listLayout.Padding = UDim.new(0, 4 * newScale)
-        dropdownList.ScrollBarThickness = isMobile and math.max(16 * newScale, 8) or math.max(6 * newScale, 4)
-
-        -- Update existing dropdown buttons
-        for _, child in ipairs(dropdownList:GetChildren()) do
-            if child:IsA("TextButton") then
-                child.Size = UDim2.new(1, -4 * newScale, 0, 28 * newScale)
-                child.TextSize = Theme.TextSize
-            end
-        end
+        dropdownList.Position = UDim2.new(0, pad, 0, currentY)
+        local dropH = math.max(150 * newScale, 200)
+        dropdownList.Size = UDim2.new(1, -mpad, 0, dropH)
+        listLayout.Padding = UDim.new(0, math.max(4 * newScale, 8))
+        dropdownList.ScrollBarThickness = isMobile and math.max(16 * newScale, 20) or math.max(6 * newScale, 6)
+        currentY = currentY + dropH + (gap * 2)  -- Larger gap after dropdown
 
         -- Auto btn
-        autoBtn.Position = UDim2.new(0, pad, 0, 350 * newScale)
-        autoBtn.Size = UDim2.new(1, -mpad, 0, 36 * newScale)
-        autoBtn.TextSize = math.clamp(16 * newScale, 14, 20)
+        autoBtn.Position = UDim2.new(0, pad, 0, currentY)
+        local autoH = math.max(36 * newScale, minTap + 12)
+        autoBtn.Size = UDim2.new(1, -mpad, 0, autoH)
+        autoBtn.TextSize = math.clamp(16 * newScale * (isMobile and 1.2 or 1), 14, 24)
+        currentY = currentY + autoH + gap
 
         -- Both btn
-        bothAutoBtn.Position = UDim2.new(0, pad, 0, 392 * newScale)
-        bothAutoBtn.Size = UDim2.new(1, -mpad, 0, 36 * newScale)
-        bothAutoBtn.TextSize = math.clamp(16 * newScale, 14, 20)
+        bothAutoBtn.Position = UDim2.new(0, pad, 0, currentY)
+        bothAutoBtn.Size = UDim2.new(1, -mpad, 0, autoH)
+        bothAutoBtn.TextSize = math.clamp(16 * newScale * (isMobile and 1.2 or 1), 14, 24)
 
         -- Recalculate dropdown canvas after resize
         updateDropdownItems()
@@ -1360,7 +1375,6 @@ AddTab("AutoBuy", function(parent)
     updateAutoBtn()
     updateBothAutoBtn()
 end)
-
 
 -- Initial scroll updates
 UpdateScrollBar(leftScroll)
