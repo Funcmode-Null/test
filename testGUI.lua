@@ -3,13 +3,11 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 local HapticService = game:GetService("HapticService")
-local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local isMobile = UserInputService.TouchEnabled
-local lowEndMode = isMobile  -- Proxy for low-end devices (mobile often lower perf)
 
 -- Remove old GUI
 local existing = playerGui:FindFirstChild("TCS_ScriptGUI")
@@ -46,26 +44,16 @@ local tweenSlow = TweenInfo.new(0.3, Enum.EasingStyle.Quad)
 local function New(class, props)
     local obj = Instance.new(class)
     if props then
-        if typeof(props)=="Instance" then 
-            pcall(function() obj.Parent=props end)
+        if typeof(props)=="Instance" then obj.Parent=props
         elseif type(props)=="table" then
-            for k,v in pairs(props) do
-                pcall(function() obj[k]=v end)
-            end
-        else 
-            warn(("New(): props must be table/Instance, got %s"):format(typeof(props)))
-        end
+            for k,v in pairs(props) do obj[k]=v end
+        else error(("New(): props must be table/Instance, got %s"):format(typeof(props))) end
     end
     return obj
 end
 
 local function PlayTween(obj, info, props)
-    if not obj or lowEndMode then  -- Instant change on low-end
-        for k,v in pairs(props) do 
-            pcall(function() obj[k] = v end)
-        end
-        return { Play = function() end }  -- Dummy
-    end
+    if not obj then return end
     local t = TweenService:Create(obj, info, props)
     t:Play()
     return t
@@ -110,8 +98,8 @@ end
 local function MakeUI()
     local screenGui = New("ScreenGui",{Name="TCS_ScriptGUI",ResetOnSpawn=false,Parent=playerGui})
 
-    local mainWidth = math.clamp(isMobile and 0.75 or 0.55, 0.4, 0.8)  -- Clamp para small screens
-    local mainHeight = math.clamp(isMobile and 0.55 or 0.6, 0.3, 0.7)
+    local mainWidth = isMobile and 0.75 or 0.55
+    local mainHeight = isMobile and 0.55 or 0.6
 
     local state = LoadState()
     local savedPos = state and state.Position
@@ -124,7 +112,7 @@ local function MakeUI()
         Name = "Main",
         AnchorPoint = Vector2.new(0,0.5),
         Position = savedPos and UDim2.fromOffset(savedPos.X, savedPos.Y) or UDim2.new(0,10,0.5,0),
-        Size = savedSize and UDim2.fromOffset(savedSize.X, savedSize.Y) or UDim2.new(mainWidth,0,mainHeight,0),  -- Scale-based
+        Size = savedSize and UDim2.fromOffset(savedSize.X, savedSize.Y) or UDim2.new(mainWidth,0,mainHeight,0),
         BackgroundColor3 = Theme.Colors.Background,
         BorderSizePixel = 0,
         ClipsDescendants = true
@@ -192,12 +180,11 @@ local function MakeUI()
         Position=UDim2.new(0,0,0,34),
         Size=UDim2.new(1,0,1,-34),
         BackgroundTransparency=1,
-        Name="Body",
-        ClipsDescendants = true  -- Add clipping
+        Name="Body"
     })
 
-    local leftPanel = New("Frame",{Parent=body,Size=UDim2.new(0.25,0,1,0),BackgroundColor3=Theme.Colors.PanelAlt,BorderSizePixel=0, ClipsDescendants = true})
-    local rightPanel = New("Frame",{Parent=body,Position=UDim2.new(0.25,0,0,0),Size=UDim2.new(0.75,0,1,0),BackgroundColor3=Theme.Colors.Panel,BorderSizePixel=0, ClipsDescendants = true})
+    local leftPanel = New("Frame",{Parent=body,Size=UDim2.new(0.25,0,1,0),BackgroundColor3=Theme.Colors.PanelAlt,BorderSizePixel=0})
+    local rightPanel = New("Frame",{Parent=body,Position=UDim2.new(0.25,0,0,0),Size=UDim2.new(0.75,0,1,0),BackgroundColor3=Theme.Colors.Panel,BorderSizePixel=0})
 
     -- Scrolls
     local leftScroll = New("ScrollingFrame",{
@@ -205,7 +192,7 @@ local function MakeUI()
         Size=UDim2.new(1,0,1,-16),
         Position=UDim2.new(0,0,0,8),
         ScrollBarThickness=isMobile and 16 or 6,
-        ScrollBarImageTransparency=1,  -- Hide scroll bar by default
+        ScrollBarImageTransparency=1,
         BackgroundTransparency=1
     })
     New("UIListLayout",{Parent=leftScroll,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,Theme.Padding)})
@@ -216,38 +203,10 @@ local function MakeUI()
         Size=UDim2.new(1, -2*padding,1, -2*padding),
         Position=UDim2.new(0, padding,0, padding),
         ScrollBarThickness=isMobile and 16 or 8,
-        ScrollBarImageTransparency=1,  -- Hide scroll bar by default
-        BackgroundTransparency=1,
-        ClipsDescendants = true  -- Add clipping
+        ScrollBarImageTransparency=1,
+        BackgroundTransparency=1
     })
-    New("UIListLayout",{Parent=contentScroll,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,0)})  -- Removed padding to avoid extra space
-
-    -- Swipe for tabs setup
-    local lastTouchPos
-    contentScroll.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch then
-            lastTouchPos = input.Position
-        end
-    end)
-    contentScroll.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch and lastTouchPos then
-            local deltaX = input.Position.X - lastTouchPos.X
-            if math.abs(deltaX) > 50 then  -- Swipe threshold
-                -- Find next/prev tab
-                local tabOrder = {}  -- Will be populated in AddTab
-                -- Assuming tabOrder is global now, logic here
-                local currentIndex = 0
-                for i, tabName in ipairs(tabOrder) do
-                    if tabName == currentTab then currentIndex = i break end
-                end
-                local direction = deltaX > 0 and -1 or 1  -- Right swipe prev, left next
-                local nextIndex = ((currentIndex + direction - 1) % #tabOrder) + 1
-                local nextTab = tabOrder[nextIndex]
-                if nextTab then SwitchTab(nextTab) end
-            end
-            lastTouchPos = nil
-        end
-    end)
+    New("UIListLayout",{Parent=contentScroll,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,0)})
 
     -- Notifications - Top-right on mobile, bottom-right on desktop
     local notifHolder = New("Frame",{
@@ -306,7 +265,6 @@ end
 
 -- TAB BUTTONS table
 local tabs, tabFrames, tabButtons, currentTab = {}, {}, {}, nil
-local tabOrder = {}  -- For swipe ordering
 
 -- Scale calculation
 local function GetScaleFactor()
@@ -323,41 +281,31 @@ Theme.Padding = math.clamp(8 * scaleFactor, isMobile and 8 or 4, isMobile and 20
 
 local function UpdateButtonSize(btn)
     if btn and btn:IsA("TextButton") then
-        local height = isMobile and 44 or 32  -- Min 44px for touch targets
+        local height = isMobile and 40 or 30
         local widthOffset = 0
         btn.Size = UDim2.new(1, widthOffset, 0, height * scaleFactor)
         btn.TextSize = Theme.TextSize
     end
 end
 
--- Apply to existing tab buttons
-for _,btn in pairs(tabButtons) do
-    UpdateButtonSize(btn)
-end
-
--- Throttled scroll update
-local scrollDebounce = {}
+-- Function to update scroll bar visibility and canvas size
 local function UpdateScrollBar(scrollFrame)
-    local id = tostring(scrollFrame)
-    local now = tick()
-    if scrollDebounce[id] and now - scrollDebounce[id] < 0.1 then return end  -- 10Hz max
-    scrollDebounce[id] = now
-
     local listLayout = scrollFrame:FindFirstChildOfClass("UIListLayout")
     if not listLayout then return end
 
     local contentHeight = listLayout.AbsoluteContentSize.Y
     local frameHeight = scrollFrame.AbsoluteSize.Y
 
-    -- Set CanvasSize to match content height exactly, avoiding extra space
-    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, math.max(contentHeight, frameHeight))  -- Ensure canvas doesn't shrink below frame height
+    -- Set CanvasSize to content height exactly
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, contentHeight)
 
     -- Hide scroll bar if content fits or is smaller than frame, show only if it exceeds
     scrollFrame.ScrollBarImageTransparency = contentHeight <= frameHeight and 1 or 0
 end
 
--- Function to update all elements dynamically on scale change
-local function UpdateScale()
+-- Combined update function for viewport changes
+local function OnViewportChanged()
+    local viewportSize = workspace.CurrentCamera.ViewportSize
     scaleFactor = GetScaleFactor()
     Theme.TextSize = math.clamp(14 * scaleFactor, 12, 24)
     Theme.TitleSize = math.clamp(18 * scaleFactor, 14, 30)
@@ -380,15 +328,15 @@ local function UpdateScale()
         local listLayout = scroll:FindFirstChildOfClass("UIListLayout")
         if listLayout then
             if scroll == contentScroll then
-                listLayout.Padding = UDim.new(0, 0)  -- No padding for content to avoid extra space
+                listLayout.Padding = UDim.new(0, 0)
             else
-                listLayout.Padding = UDim.new(0, Theme.Padding)  -- Keep padding for leftScroll
+                listLayout.Padding = UDim.new(0, Theme.Padding)
             end
         end
         for _, child in pairs(scroll:GetChildren()) do
             if child:IsA("TextButton") then
                 child.TextSize = Theme.TextSize
-                local h = isMobile and 44 or 32
+                local h = isMobile and 40 or 30
                 local widthOffset = 0
                 child.Size = UDim2.new(1, widthOffset, 0, h * scaleFactor)
             elseif child:IsA("TextLabel") then
@@ -397,29 +345,53 @@ local function UpdateScale()
                 child.Size = UDim2.new(1, 0, 0, labelHeight)
             end
         end
-        UpdateScrollBar(scroll)  -- Update scroll bar visibility
+        UpdateScrollBar(scroll)
     end
 
     -- Update notif holder padding
     local notifLayout = notifHolder:FindFirstChildOfClass("UIListLayout")
     if notifLayout then notifLayout.Padding = UDim.new(0, Theme.Padding) end
+
+    -- Clamp main position
+    local mainPos = main.Position
+    local mainAbsSize = main.AbsoluteSize
+    local clampedX = math.clamp(mainPos.X.Offset, 0, viewportSize.X - mainAbsSize.X)
+    local clampedY = math.clamp(mainPos.Y.Offset, 0, viewportSize.Y - mainAbsSize.Y)
+    if clampedX ~= mainPos.X.Offset or clampedY ~= mainPos.Y.Offset then
+        main.Position = UDim2.new(0, clampedX, 0.5, clampedY - mainAbsSize.Y / 2)
+    end
+
+    -- Clamp toggle position
+    local toggleBtn = UI.screenGui:FindFirstChild("ToggleButton")
+    if toggleBtn then
+        local pos = toggleBtn.Position
+        local absSize = toggleBtn.AbsoluteSize
+        local clampedTX = math.clamp(pos.X.Offset, 0, viewportSize.X - absSize.X)
+        local clampedTY = math.clamp(pos.Y.Offset, 0, viewportSize.Y - absSize.Y)
+        if clampedTX ~= pos.X.Offset or clampedTY ~= pos.Y.Offset then
+            PlayTween(toggleBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                Position = UDim2.new(0, clampedTX, 0, clampedTY)
+            })
+            SaveTogglePos({ X = clampedTX, Y = clampedTY })
+        end
+    end
+
+    -- Update resize limits
+    if resizeHandle then
+        maxWidth = viewportSize.X * 0.9
+        maxHeight = viewportSize.Y * 0.9
+    end
 end
 
--- Listen for viewport changes
-workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale)
+-- Listen for viewport changes (combined)
+workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(OnViewportChanged)
 
--- Orientation proxy (additional listener)
-UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(UpdateScale)
+-- Initial update
+OnViewportChanged()
 
--- Notify function for scaled notifications with rate-limit
+-- Notify function for scaled notifications
 local activeNotifs = {}
-local lastNotifyTime = 0
-local notifyCooldown = 0.5  -- 500ms min between notifies
 Notify = function(text, nType, duration)
-    local now = tick()
-    if now - lastNotifyTime < notifyCooldown then return end  -- Rate limit
-    lastNotifyTime = now
-
     nType = nType or "info"
     duration = duration or 4
 
@@ -437,7 +409,7 @@ Notify = function(text, nType, duration)
         ClipsDescendants = true
     })
     New("UICorner", { Parent = notif, CornerRadius = UDim.new(0, 8) })
-    New("UIStroke", { Parent = notif, Color = Theme.Colors.Shadow, Thickness = lowEndMode and 0.5 or 1, Transparency = 0.6 })
+    New("UIStroke", { Parent = notif, Color = Theme.Colors.Shadow, Thickness = 1, Transparency = 0.6 })
     local label = New("TextLabel", {
         Parent = notif,
         Size = UDim2.new(1, -16, 1, -16),
@@ -485,45 +457,20 @@ Notify = function(text, nType, duration)
     end)
 end
 
--- Apply scale to left/right scroll content
-for _, scroll in pairs({leftScroll, contentScroll}) do
-    for _, child in pairs(scroll:GetChildren()) do
-        if child:IsA("TextButton") then
-            local h = isMobile and 44 or 32
-            local widthOffset = 0
-            child.Size = UDim2.new(1, widthOffset, 0, h * scaleFactor)
-            child.TextSize = Theme.TextSize
-        elseif child:IsA("TextLabel") then
-            local labelHeight = math.clamp(30 * scaleFactor, 24, 40)
-            child.Size = UDim2.new(1, 0, 0, labelHeight)
-            child.TextSize = Theme.TextSize
-        end
-    end
-    UpdateScrollBar(scroll)  -- Initial scroll bar update
-end
-
 -- Connections tracker
 local connections = {}
 local function Connect(sig, func) local c = sig:Connect(func) table.insert(connections, c) return c end
 local function CleanupConnections() for _, c in ipairs(connections) do if c and c.Disconnect then c:Disconnect() end end connections = {} end
 
-local needsSave = false  -- Batch save flag
-
--- Dragging with debounce and batch save
+-- Dragging
 do
     local dragging, dragStart, startPos, dragInput
     local dragChangedConn
-    local lastUpdate = 0
-    local debounceTime = 1/60  -- 60FPS cap
     local function update(input)
-        local now = tick()
-        if now - lastUpdate < debounceTime then return end
-        lastUpdate = now
         local delta = input.Position - dragStart
         main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        needsSave = true  -- Flag for batch save
     end
-    Connect(titleBar.InputBegan, function(input)  -- Note: UI.titleBar -> titleBar
+    Connect(titleBar.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
@@ -532,10 +479,7 @@ do
             dragChangedConn = input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then 
                     dragging = false 
-                    if needsSave then
-                        SaveState({ Position = { X = main.AbsolutePosition.X, Y = main.AbsolutePosition.Y }, Size = { X = main.AbsoluteSize.X, Y = main.AbsoluteSize.Y }, Minimized = isMinimized, Collapsed = isCollapsed })
-                        needsSave = false
-                    end
+                    SaveState({ Position = { X = main.AbsolutePosition.X, Y = main.AbsolutePosition.Y }, Size = { X = main.AbsoluteSize.X, Y = main.AbsoluteSize.Y }, Minimized = isMinimized, Collapsed = isCollapsed })
                 end
             end)
         end
@@ -548,10 +492,10 @@ do
     end)
 end
 
--- Haptic feedback for mobile button clicks (checked once globally)
+-- Haptic feedback for mobile button clicks
 local supportsHaptic = HapticService:IsVibrationSupported(Enum.UserInputType.Touch) and HapticService:IsMotorSupported(Enum.UserInputType.Touch, Enum.VibrationMotor.Small)
 local function HapticClick()
-    if isMobile and supportsHaptic and not lowEndMode then  -- Skip on low-end
+    if isMobile and supportsHaptic then
         HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Small, 1)
         task.delay(0.05, function()
             HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Small, 0)
@@ -596,8 +540,8 @@ Connect(btnMin.MouseButton1Click, function()
 end)
 Connect(btnClose.MouseButton1Click, function()
     HapticClick()
-    CleanupConnections()  -- Disconnect all
-    UI.screenGui:Destroy()  -- Full cleanup
+    CleanupConnections()
+    UI.screenGui:Destroy()
 end)
 
 -- Hotkey toggle
@@ -607,13 +551,15 @@ Connect(UserInputService.InputBegan, function(input, gpe)
     end
 end)
 
--- Resize handle with debounce and batch save
+-- Resize handle
 local resizeHandle
+local minWidth = isMobile and 250 or 300
+local minHeight = isMobile and 200 or 200
+local maxWidth = workspace.CurrentCamera.ViewportSize.X * 0.9
+local maxHeight = workspace.CurrentCamera.ViewportSize.Y * 0.9
 do
     local resizing = false
     local startSize, startMouse
-    local lastResizeUpdate = 0
-    local resizeDebounceTime = 1/60
     resizeHandle = New("Frame", {
         Parent = main,
         Size = isMobile and UDim2.new(0, 28, 0, 28) or UDim2.new(0, 16, 0, 16),
@@ -638,29 +584,19 @@ do
     end
     local hoverTween = TweenService:Create(resizeHandle, TweenInfo.new(0.15), { BackgroundColor3 = Theme.Colors.ButtonActive })
     local leaveTween = TweenService:Create(resizeHandle, TweenInfo.new(0.15), { BackgroundColor3 = Theme.Colors.Button })
-    resizeHandle.MouseEnter:Connect(function() hoverTween:Play() end)
-    resizeHandle.MouseLeave:Connect(function() if not resizing then leaveTween:Play() end end)
-
-    local screenSize = workspace.CurrentCamera.ViewportSize
-    local minWidth = math.max(200, screenSize.X * 0.3)  -- Scale-based min
-    local minHeight = math.max(150, screenSize.Y * 0.2)
-    local maxWidth = screenSize.X * 0.9
-    local maxHeight = screenSize.Y * 0.9
 
     Connect(resizeHandle.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             resizing = true
             startMouse = input.Position
             startSize = main.Size
+            hoverTween:Play()
             input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then
                     resizing = false
                     leaveTween:Play()
-                    if needsSave then
-                        SaveState({ Position = { X = main.AbsolutePosition.X, Y = main.AbsolutePosition.Y }, Size = { X = main.AbsoluteSize.X, Y = main.AbsoluteSize.Y }, Minimized = isMinimized, Collapsed = isCollapsed })
-                        needsSave = false
-                    end
-                    UpdateScrollBar(leftScroll)  -- Update scroll bars on resize
+                    SaveState({ Position = { X = main.AbsolutePosition.X, Y = main.AbsolutePosition.Y }, Size = { X = main.AbsoluteSize.X, Y = main.AbsoluteSize.Y }, Minimized = isMinimized, Collapsed = isCollapsed })
+                    UpdateScrollBar(leftScroll)
                     UpdateScrollBar(contentScroll)
                 end
             end)
@@ -668,18 +604,16 @@ do
     end)
     Connect(UserInputService.InputChanged, function(input)
         if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local now = tick()
-            if now - lastResizeUpdate < resizeDebounceTime then return end
-            lastResizeUpdate = now
             local delta = input.Position - startMouse
             local newWidth = math.clamp(startSize.X.Offset + delta.X, minWidth, maxWidth)
             local newHeight = math.clamp(startSize.Y.Offset + delta.Y, minHeight, maxHeight)
             main.Size = UDim2.new(0, newWidth, 0, newHeight)
-            needsSave = true
-            UpdateScrollBar(leftScroll)  -- Update scroll bars during resize
+            UpdateScrollBar(leftScroll)
             UpdateScrollBar(contentScroll)
         end
     end)
+    resizeHandle.MouseEnter:Connect(function() if not resizing then hoverTween:Play() end end)
+    resizeHandle.MouseLeave:Connect(function() if not resizing then leaveTween:Play() end end)
 end
 
 -- Tabs system
@@ -689,8 +623,6 @@ local function SwitchTab(name)
     for tName, btn in pairs(tabButtons) do if btn and btn.Parent then btn.BackgroundColor3 = Theme.Colors.Button end end
     if tabFrames[name] then
         tabFrames[name].Visible = true
-        tabFrames[name].Position = UDim2.new(1, 0, 0, 0)
-        PlayTween(tabFrames[name], tweenFast, { Position = UDim2.new(0, 0, 0, 0) })
     end
     if tabButtons[name] then tabButtons[name].BackgroundColor3 = Theme.Colors.ButtonActive end
     currentTab = name
@@ -699,8 +631,7 @@ end
 
 local function AddTab(name, callback)
     tabs[name] = callback
-    table.insert(tabOrder, name)  -- For swipe order
-    local height = isMobile and 44 or 32  -- Larger touch target
+    local height = isMobile and 40 or 30
     local btn = New("TextButton", {
         Parent = leftScroll,
         Text = name,
@@ -708,11 +639,12 @@ local function AddTab(name, callback)
         TextSize = isMobile and 18 or Theme.TextSize,
         TextColor3 = Theme.Colors.Text,
         BackgroundColor3 = Theme.Colors.Button,
-        Size = UDim2.new(1, 0, 0, height),
+        Size = UDim2.new(1, 0, 0, height * scaleFactor),
         BorderSizePixel = 0
     })
     New("UICorner", { Parent = btn, CornerRadius = UDim.new(0, 6) })
     tabButtons[name] = btn
+    UpdateButtonSize(btn)
 
     Connect(btn.MouseButton1Click, function()
         HapticClick()
@@ -722,23 +654,16 @@ local function AddTab(name, callback)
                 Size = UDim2.new(1, 0, 0, 0),
                 BackgroundTransparency = 1,
                 AutomaticSize = Enum.AutomaticSize.Y,
-                Visible = true,
-                ClipsDescendants = true
+                Visible = true
             })
             tabFrames[name] = frame
             callback(frame)
-            -- Throttle update via AbsoluteContentSize
-            local listLayout = contentScroll:FindFirstChildOfClass("UIListLayout")
-            if listLayout then
-                listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-                    UpdateScrollBar(contentScroll)
-                end)
-            end
+            UpdateScrollBar(contentScroll)
         end
         SwitchTab(name)
     end)
 
-    UpdateScrollBar(leftScroll)  -- Update left scroll bar after adding tab button
+    UpdateScrollBar(leftScroll)
 
     if not currentTab then
         if not tabFrames[name] then
@@ -747,17 +672,11 @@ local function AddTab(name, callback)
                 Size = UDim2.new(1, 0, 0, 0),
                 BackgroundTransparency = 1,
                 AutomaticSize = Enum.AutomaticSize.Y,
-                Visible = true,
-                ClipsDescendants = true
+                Visible = true
             })
             tabFrames[name] = frame
             callback(frame)
-            local listLayout = contentScroll:FindFirstChildOfClass("UIListLayout")
-            if listLayout then
-                listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-                    UpdateScrollBar(contentScroll)
-                end)
-            end
+            UpdateScrollBar(contentScroll)
         end
         SwitchTab(name)
     end
@@ -767,16 +686,18 @@ end
 -- Floating Toggle Button (Draggable + Auto-Clamp with Tween)
 do
     local savedTogglePos = LoadTogglePos()
-    -- On mobile, make toggle button slightly smaller for tiny screens
-    local toggleSize = isMobile and 60 or 60  -- Reduced from 80 to 60 on mobile
+    local toggleSize = isMobile and 60 or 60
     local toggleBtn = New("TextButton", {
         Parent = UI.screenGui,
+        Name = "ToggleButton",
         Text = "TCS",
         Size = UDim2.new(0, toggleSize, 0, toggleSize),
         BackgroundColor3 = Theme.Colors.Button,
         TextColor3 = Theme.Colors.Text,
         BorderSizePixel = 0,
-        ZIndex = 50
+        ZIndex = 50,
+        Font = Theme.FontBold,
+        TextSize = math.clamp(16 * scaleFactor, 12, 20)
     })
     New("UICorner", { Parent = toggleBtn, CornerRadius = UDim.new(0, 12) })
 
@@ -788,13 +709,11 @@ do
         main.Visible = not main.Visible
     end)
 
-    -- Dragging with debounce
+    -- Dragging
     local dragging = false
     local dragStart, startPos
-    local toggleLastUpdate = 0
-    local toggleDebounceTime = 1/60
 
-    toggleBtn.InputBegan:Connect(function(input)
+    Connect(toggleBtn.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
@@ -809,11 +728,8 @@ do
         end
     end)
 
-    UserInputService.InputChanged:Connect(function(input)
+    Connect(UserInputService.InputChanged, function(input)
         if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local now = tick()
-            if now - toggleLastUpdate < toggleDebounceTime then return end
-            toggleLastUpdate = now
             local delta = input.Position - dragStart
             local newX = math.clamp(startPos.X.Offset + delta.X, 0, workspace.CurrentCamera.ViewportSize.X - toggleBtn.AbsoluteSize.X)
             local newY = math.clamp(startPos.Y.Offset + delta.Y, 0, workspace.CurrentCamera.ViewportSize.Y - toggleBtn.AbsoluteSize.Y)
@@ -821,32 +737,13 @@ do
         end
     end)
 
-    -- Auto-clamp on screen resize with smooth tween
-    local function ClampPosition()
-        local pos = toggleBtn.Position
-        local absSize = toggleBtn.AbsoluteSize
-        local clampedX = math.clamp(pos.X.Offset, 0, workspace.CurrentCamera.ViewportSize.X - absSize.X)
-        local clampedY = math.clamp(pos.Y.Offset, 0, workspace.CurrentCamera.ViewportSize.Y - absSize.Y)
-
-        if clampedX ~= pos.X.Offset or clampedY ~= pos.Y.Offset then
-            local tween = TweenService:Create(toggleBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                Position = UDim2.new(0, clampedX, 0, clampedY)
-            })
-            tween:Play()
-        end
-
-        SaveTogglePos({ X = clampedX, Y = clampedY })
-    end
-
-    workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(ClampPosition)
-
     -- Always show toggle button, but hide when main is visible on mobile
     if isMobile then
         local function UpdateToggleVis()
             toggleBtn.Visible = not main.Visible
         end
         UpdateToggleVis()
-        main:GetPropertyChangedSignal("Visible"):Connect(UpdateToggleVis)
+        Connect(main:GetPropertyChangedSignal("Visible"), UpdateToggleVis)
     end
 end
 
@@ -855,11 +752,11 @@ Notify("Created By TCS_Dev [FuncMode]", "info")
 
 -- Example usage to test tab content and buttons
 AddTab("Tab 1", function(frame)
-    for i = 1, 3 do  -- Adjust number to test fitting
+    for i = 1, 3 do
         New("TextLabel", {
             Parent = frame,
             Text = "Item " .. i,
-            Size = UDim2.new(1, 0, 0, 30 * scaleFactor),
+            Size = UDim2.new(1, 0, 0, math.clamp(30 * scaleFactor, 24, 40)),
             BackgroundTransparency = 1,
             TextColor3 = Theme.Colors.Text,
             TextSize = Theme.TextSize,
@@ -868,11 +765,11 @@ AddTab("Tab 1", function(frame)
     end
 end)
 AddTab("Tab 2", function(frame)
-    for i = 1, 3 do  -- Adjust number to test fitting
+    for i = 1, 3 do
         New("TextLabel", {
             Parent = frame,
             Text = "Item " .. i,
-            Size = UDim2.new(1, 0, 0, 30 * scaleFactor),
+            Size = UDim2.new(1, 0, 0, math.clamp(30 * scaleFactor, 24, 40)),
             BackgroundTransparency = 1,
             TextColor3 = Theme.Colors.Text,
             TextSize = Theme.TextSize,
@@ -880,3 +777,7 @@ AddTab("Tab 2", function(frame)
         })
     end
 end)
+
+-- Initial scroll updates
+UpdateScrollBar(leftScroll)
+UpdateScrollBar(contentScroll)
